@@ -1,14 +1,20 @@
 from typing import Dict, List, Optional
+import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field, validator
 
 from app.engine.reoptimize import reoptimize
 from app.engine.solver import backtrack
 from app.models.entities import Assignment, Resource, Task
 from app.utils.scoring import score_schedule
+from app.storage.database import get_db
+from app.storage.repositories import TaskRepository, ResourceRepository, ScheduleRepository
+from app.storage.cache import ScheduleCache
+from sqlalchemy.orm import Session
 
 router = APIRouter()
+cache = ScheduleCache()
 
 
 class ResourceDTO(BaseModel):
@@ -75,6 +81,7 @@ class GenerateRequest(BaseModel):
 class ScheduleResponse(BaseModel):
     schedule: Dict[str, AssignmentDTO]
     score: float
+    cached: bool = False
 
 
 class ReoptimizeRequest(BaseModel):
@@ -84,18 +91,46 @@ class ReoptimizeRequest(BaseModel):
 
 
 @router.post("/schedule/generate", response_model=ScheduleResponse)
-def generate(req: GenerateRequest):
+def generate(req: GenerateRequest, db: Session = Depends(get_db)):
+    # Check cache first
+    constraint_hash = ScheduleCache.hash_constraints(
+        [t.dict() for t in req.tasks],
+        [r.dict() for r in req.resources]
+    )
+    cached_result = cache.get(constraint_hash)
+    if cached_result:
+        return {"schedule": cached_result["schedule"], "score": cached_result["score"], "cached": True}
+    
     task_map = {t.id: t.to_domain() for t in req.tasks}
     res_map = {r.id: r.to_domain() for r in req.resources}
+    
+    # Save to DB
+    task_repo = TaskRepository(db)
+    resource_repo = ResourceRepository(db)
+    for task in task_map.values():
+        task_repo.save(task)
+    for resource in res_map.values():
+        resource_repo.save(resource)
+    
     result = backtrack(task_map, res_map)
     if result is None:
         raise HTTPException(status_code=422, detail="No feasible schedule found")
+    
     dto_map = {tid: AssignmentDTO.from_domain(a) for tid, a in result.items()}
-    return {"schedule": dto_map, "score": score_schedule(result, task_map)}
+    final_score = score_schedule(result, task_map)
+    
+    # Cache result
+    cache_data = {
+        "schedule": {k: v.dict() for k, v in dto_map.items()},
+        "score": final_score
+    }
+    cache.set(constraint_hash, cache_data)
+    
+    return {"schedule": dto_map, "score": final_score, "cached": False}
 
 
 @router.post("/schedule/reoptimize", response_model=ScheduleResponse)
-def reoptimize_endpoint(req: ReoptimizeRequest):
+def reoptimize_endpoint(req: ReoptimizeRequest, db: Session = Depends(get_db)):
     task_map = {t.id: t.to_domain() for t in req.tasks}
     res_map = {r.id: r.to_domain() for r in req.resources}
     existing = None
@@ -105,4 +140,4 @@ def reoptimize_endpoint(req: ReoptimizeRequest):
     if result is None:
         raise HTTPException(status_code=422, detail="No feasible schedule found")
     dto_map = {tid: AssignmentDTO.from_domain(a) for tid, a in result.items()}
-    return {"schedule": dto_map, "score": score_schedule(result, task_map)}
+    return {"schedule": dto_map, "score": score_schedule(result, task_map), "cached": False}
