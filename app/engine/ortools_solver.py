@@ -1,3 +1,36 @@
+"""
+OR-Tools CP-SAT Solver for Scheduling CSP.
+
+This module provides Google OR-Tools integration for large scheduling instances.
+Uses Constraint Programming (CP) with SAT encoding for efficient search.
+
+Key Features:
+- Hard constraints: resource conflicts, availability windows
+- Soft constraints: preferences encoded as penalty minimization
+- Configurable time limits for production use
+- Automatic scaling for large problem sizes (>= 15 tasks)
+
+Algorithm:
+OR-Tools CP-SAT uses:
+1. SAT encoding of CP constraints
+2. Conflict-driven clause learning (CDCL)
+3. Linear relaxations for optimization
+4. Parallelized search strategies
+
+Complexity:
+- Worst: NP-hard (SAT-based), exponential in worst case
+- Practical: Often polynomial with pruning; scales to 100s of tasks
+- Time: Configurable limit (default 10s per solve)
+
+Trade-offs vs Backtracking:
++ Scales better to large instances (>= 15 tasks)
++ Production-grade solver with decades of optimization
++ Handles complex constraints natively
+- Less interpretable (black-box solver)
+- Setup overhead for small instances
+- May not find optimal in time limit
+"""
+
 from typing import Dict, Optional
 
 from ortools.sat.python import cp_model
@@ -9,7 +42,28 @@ from app.utils.scoring import score_schedule
 def solve_with_ortools(tasks: Dict[str, Task], resources: Dict[str, Resource], time_limit_seconds: int = 10) -> Optional[Dict[str, Assignment]]:
     """
     Solve scheduling problem using Google OR-Tools CP-SAT solver.
-    Automatically handles hard constraints; soft constraints added as penalties.
+    
+    Models scheduling as Constraint Programming problem:
+    - Decision variables: start times for each task
+    - Hard constraints: no resource conflicts, availability windows
+    - Objective: minimize soft constraint penalties
+    
+    Args:
+        tasks: Map of task_id to Task
+        resources: Map of resource_id to Resource
+        time_limit_seconds: Max solver runtime (default 10s)
+        
+    Returns:
+        Feasible schedule with minimal soft constraint score, or None if infeasible
+        
+    Complexity:
+        Setup: O(n^2) for pairwise constraint encoding
+        Solve: NP-hard; runtime bounded by time_limit
+        
+    Notes:
+    - Automatically handles hard constraints via CP model
+    - Soft constraints added as penalty terms to objective
+    - Uses disjunctive constraints for resource conflicts
     """
     model = cp_model.CpModel()
 

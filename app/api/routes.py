@@ -29,9 +29,12 @@ class ResourceDTO(BaseModel):
 
     @validator("availability")
     def validate_windows(cls, v: List[List[int]]):
+        """Validate availability windows format and constraints."""
         for win in v:
             if len(win) != 2 or win[0] >= win[1]:
                 raise ValueError("availability windows must be [start, end] with start < end")
+            if win[0] < 0 or win[1] > 1440:
+                raise ValueError("time values must be in [0, 1440] (minutes in a day)")
         return v
 
     def to_domain(self) -> Resource:
@@ -46,13 +49,23 @@ class TaskDTO(BaseModel):
     earliest_start: Optional[int] = None
     latest_end: Optional[int] = None
 
+    @validator("duration")
+    def validate_duration(cls, v: int):
+        """Ensure task duration is reasonable (1 min to 24 hours)."""
+        if v < 1 or v > 1440:
+            raise ValueError("duration must be between 1 and 1440 minutes")
+        return v
+
     @validator("preferred_windows")
     def validate_pref_windows(cls, v: Optional[List[List[int]]]):
+        """Validate preferred time windows format."""
         if v is None:
             return v
         for win in v:
             if len(win) != 2 or win[0] >= win[1]:
                 raise ValueError("preferred windows must be [start, end] with start < end")
+            if win[0] < 0 or win[1] > 1440:
+                raise ValueError("time values must be in [0, 1440] (minutes in a day)")
         return v
 
     def to_domain(self) -> Task:
@@ -117,10 +130,22 @@ def generate(
     """
     Generate an optimized schedule for tasks and resources.
     
+    **Algorithm**:
+    1. Validate input (DTOs with Pydantic validators)
+    2. Check cache for identical problem
+    3. Select solver (auto, backtracking, or ortools)
+    4. Solve CSP and compute soft constraint score
+    5. Store in database and cache
+    
     **Solver Selection:**
     - `auto`: Automatically selects solver based on problem size (backtracking < 15 tasks, ortools >= 15)
     - `backtracking`: CSP backtracking with heuristics (faster for small problems)
     - `ortools`: Google OR-Tools CP-SAT solver (better for large/complex problems)
+    
+    **Error Handling:**
+    - 400: Invalid input (malformed windows, negative durations, etc.)
+    - 422: Infeasible schedule (no valid assignment exists)
+    - 500: Solver internal error
     
     **Returns:**
     - `schedule`: Map of task_id to assignment (start, end, resource_ids)
@@ -129,6 +154,14 @@ def generate(
     - `cached`: Whether result was retrieved from cache
     """
     logger.info(f"Generate request: {len(req.tasks)} tasks, {len(req.resources)} resources, solver={solver}")
+    
+    # Input validation: check resource IDs exist
+    resource_ids = {r.id for r in req.resources}
+    for task in req.tasks:
+        for r_id in task.required_resources:
+            if r_id not in resource_ids:
+                logger.warning(f"Task {task.id} references unknown resource {r_id}")
+                raise HTTPException(status_code=400, detail=f"Task {task.id} requires unknown resource {r_id}")
     
     # Check cache first
     constraint_hash = ScheduleCache.hash_constraints(

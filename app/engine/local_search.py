@@ -1,3 +1,29 @@
+"""
+Local Search and Re-optimization Module.
+
+Provides iterative improvement algorithms for refining existing schedules.
+Useful for dynamic updates when constraints change or new tasks arrive.
+
+Algorithms:
+- Tabu Search: Neighborhood exploration with recency-based memory
+- Move operators: Time-shift (±30/60 min), resource swap
+
+Key Features:
+- Works from existing feasible solution (warm start)
+- Maintains feasibility via constraint checking
+- Escapes local optima using tabu list
+- Configurable iteration limits for production
+
+Complexity:
+- O(max_iter * n * k) where k = neighbors per task
+- Practical: ~100 iterations, 4 neighbors/task → O(400n)
+
+Use Cases:
+- Re-optimize after task cancellation
+- Adjust schedule for preference changes
+- Quick refinement when backtracking/OR-Tools too slow
+"""
+
 from typing import Dict, List, Optional
 import random
 
@@ -6,6 +32,7 @@ from app.utils.scoring import score_schedule
 
 
 def is_overlap(a: Assignment, b: Assignment) -> bool:
+    """Check if two assignments overlap in time."""
     return max(a.start, b.start) < min(a.end, b.end)
 
 
@@ -17,8 +44,40 @@ def local_search_tabu(
     tabu_tenure: int = 10,
 ) -> Dict[str, Assignment]:
     """
-    Local search with tabu list for re-optimization.
-    Explores neighborhood by shifting task start times.
+    Tabu search for schedule re-optimization.
+    
+    Algorithm:
+    1. Start from initial feasible solution
+    2. Each iteration: explore neighborhood (time shifts)
+    3. Accept best non-tabu move (even if worsening)
+    4. Add move to tabu list to prevent cycling
+    5. Update best solution if improved
+    
+    Neighborhood:
+    - Shift each task by ±30 or ±60 minutes
+    - Only feasible moves (no constraint violations)
+    
+    Args:
+        tasks: Map of task_id to Task
+        resources: Map of resource_id to Resource
+        initial_solution: Starting feasible schedule
+        max_iterations: Search budget (default 100)
+        tabu_tenure: Moves stay tabu for this many iterations (default 10)
+        
+    Returns:
+        Best schedule found (may improve or equal initial)
+        
+    Complexity:
+        O(max_iter * n * k * m) where:
+        - n = num tasks
+        - k = neighbors per task (4 for ±30/60)
+        - m = avg resources per task
+        
+    Trade-offs:
+    + Fast refinement for existing schedules
+    + Can escape local optima via tabu mechanism
+    - No optimality guarantee
+    - Quality depends on initial solution
     """
     current = initial_solution.copy()
     best = current.copy()
