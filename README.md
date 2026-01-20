@@ -10,8 +10,9 @@ SchedulrX is a constraint-based scheduling and optimization engine (not a calend
   - OR-Tools CP-SAT solver for large instances.
   - Local search (tabu) for re-optimization.
   - Constraint propagation module.
-- **app/utils**: scoring, benchmarking, and helpers.
-- **app/api**: FastAPI routes with solver selection, benchmarking endpoint.
+  - Pluggable custom constraint system.
+- **app/utils**: scoring, benchmarking, logging, and helpers.
+- **app/api**: FastAPI routes with solver selection, benchmarking endpoint, full OpenAPI docs.
 - **app/config**: settings via `pydantic` BaseSettings.
 - **app/storage**: PostgreSQL ORM models, repositories (Task/Resource/Schedule), Redis cache.
 
@@ -38,34 +39,61 @@ SchedulrX is a constraint-based scheduling and optimization engine (not a calend
 - **PostgreSQL**: stores tasks, resources, and schedules with automatic schema creation.
 - **Redis**: caches recently generated schedules by constraint hash; 1-hour TTL.
 
-## Setup & Running
+## Deployment
 
-### Start services
+### Quick Start (Docker)
 ```bash
-docker-compose up -d
+# Development
+./deploy.sh dev
+
+# Production
+./deploy.sh prod
 ```
 
-### Install and run
+### Manual Setup
 ```bash
+# Start infrastructure
+docker-compose up -d postgres redis
+
+# Local development
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\activate  # Windows
+# source .venv/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
-Open http://127.0.0.1:8000/docs for Swagger UI.
 
-### Environment
-Copy `.env.example` to `.env`:
+### Full Stack (Docker Compose)
+```bash
+docker-compose up -d
+```
+Access:
+- API: http://localhost:8000
+- Docs: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
+
+### Environment Configuration
+Create `.env` from template:
+```bash
+cp .env.example .env
+```
+
+**Key Settings:**
 ```bash
 DATABASE_URL=postgresql://user:password@localhost:5432/schedulrx
 REDIS_URL=redis://localhost:6379/0
 SOLVER_TYPE=auto  # "backtracking", "ortools", or "auto"
 ORTOOLS_TIME_LIMIT_SECONDS=10
+DEBUG=false
 ```
+
+**Environment Files:**
+- `.env.dev`: development (debug on, backtracking default)
+- `.env.prod`: production (debug off, ortools default, longer timeout)
 
 ## API Endpoints
 
-### POST /schedule/generate
+### POST /api/v1/schedule/generate
 Generate a schedule. Query parameters:
 - `solver` (default "auto"): "backtracking", "ortools", or "auto".
 
@@ -75,16 +103,33 @@ Response includes:
 - `solver_used`: which solver ran.
 - `cached`: whether result was cached.
 
-### POST /schedule/reoptimize
+### POST /api/v1/schedule/reoptimize
 Re-optimize given existing schedule. Query parameters:
 - `use_local_search` (default true): use tabu search from existing solution.
 
-### POST /schedule/benchmark
+### POST /api/v1/schedule/benchmark
 Compare solvers on same problem instance. Returns timing and quality metrics.
+
+## Extensibility
+
+### Custom Soft Constraints
+```python
+from app.engine.custom_constraints import SoftConstraint, ConstraintRegistry
+
+class MyCustomConstraint(SoftConstraint):
+    def evaluate(self, task, assignment):
+        # Your logic here
+        return penalty_value
+
+registry = ConstraintRegistry()
+registry.register_task_constraint(MyCustomConstraint(weight=1.0))
+```
+
+See [examples/custom_constraints_example.py](examples/custom_constraints_example.py) for full examples.
 
 ## Example request
 ```bash
-curl -X POST "http://localhost:8000/schedule/generate?solver=auto" \
+curl -X POST "http://localhost:8000/api/v1/schedule/generate?solver=auto" \
   -H "Content-Type: application/json" \
   -d '{
     "tasks": [
@@ -101,13 +146,39 @@ curl -X POST "http://localhost:8000/schedule/generate?solver=auto" \
 
 ### Benchmark solvers
 ```bash
-curl -X POST "http://localhost:8000/schedule/benchmark" \
+curl -X POST "http://localhost:8000/api/v1/schedule/benchmark" \
   -H "Content-Type: application/json" \
   -d '{ ... same task/resource payload ... }'
 ```
 
+## Testing
+```bash
+# Run all tests
+pytest tests/ -v
+
+# With coverage
+pytest tests/ --cov=app --cov-report=html
+
+# Quick run
+./run_tests.sh
+```
+
+## Monitoring & Logging
+- Structured logging to stdout (JSON-friendly for log aggregation)
+- Health check endpoint: `/health`
+- Docker healthchecks enabled for all services
+- Log level controlled by `DEBUG` env var
+
+## Production Considerations
+1. Use environment-specific `.env` files
+2. Enable HTTPS/TLS termination at load balancer
+3. Scale horizontally (stateless API, shared DB/Redis)
+4. Monitor solver time limits and cache hit rates
+5. Consider read replicas for PostgreSQL at scale
+6. Use Redis Sentinel or Cluster for cache HA
+
 ## Next steps
-1. Expand soft constraints (fairness, gaps, load balancing).
-2. Add comprehensive unit tests for all solvers and heuristics.
-3. Implement Dockerfile for application container.
-4. Add query optimization for large PostgreSQL datasets.
+1. Add Prometheus metrics endpoint
+2. Kubernetes deployment manifests
+3. Performance profiling and bottleneck analysis
+4. Multi-objective optimization (Pareto frontier)

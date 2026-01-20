@@ -17,6 +17,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - schedulrx-network
 
   redis:
     image: redis:7-alpine
@@ -28,6 +30,34 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - schedulrx-network
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: schedulrx-app
+    environment:
+      DATABASE_URL: postgresql://user:password@postgres:5432/schedulrx
+      REDIS_URL: redis://redis:6379/0
+      DEBUG: "false"
+      SOLVER_TYPE: auto
+      ORTOOLS_TIME_LIMIT_SECONDS: 10
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - schedulrx-network
+    restart: unless-stopped
 
 volumes:
   postgres_data:
+
+networks:
+  schedulrx-network:
+    driver: bridge
