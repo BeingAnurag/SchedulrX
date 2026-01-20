@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     redis_url: str = Field("redis://localhost:6379/0", env="REDIS_URL")
     solver_slot_size_minutes: int = 30
     solver_time_limit_seconds: int = 10
+    solver_type: str = Field("auto", env="SOLVER_TYPE")  # "backtracking", "ortools", or "auto"
+    ortools_time_limit_seconds: int = 10
+    use_constraint_propagation: bool = True
 
     class Config:
         env_file = ".env"
